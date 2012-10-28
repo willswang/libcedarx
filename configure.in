@@ -1,0 +1,29 @@
+#                                               -*- Autoconf -*-
+# Process this file with autoconf to produce a configure script.
+
+AC_PREREQ(2.65)
+AC_INIT(libcedarx, 1.0.0, wills.wang@hotmail.com)
+AM_INIT_AUTOMAKE
+AC_CONFIG_SRCDIR(libcedarx.h)
+AC_CONFIG_HEADERS(config.h)
+AC_CONFIG_MACRO_DIR(m4)
+
+# Checks for programs.
+AC_PROG_CC
+AC_PROG_CXX
+AC_PROG_LIBTOOL
+
+# Checks for libraries.
+AC_CHECK_LIB(pthread, pthread_mutex_init)
+AC_CHECK_LIB(stdc++, main,,AC_MSG_ERROR(libcedarx requires libstdc++))
+
+# Checks for header files.
+AC_CHECK_HEADERS(fcntl.h stdlib.h string.h sys/ioctl.h unistd.h)
+
+# Checks for typedefs, structures, and compiler characteristics.
+
+# Checks for library functions.
+AC_FUNC_MALLOC
+
+AC_CONFIG_FILES(Makefile libcedarx.pc)
+AC_OUTPUT

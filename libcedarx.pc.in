@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@/libcedarx
+
+Name: libcedarx
+Description: Library for cedar hardware accelerator
+Version: @PACKAGE_VERSION@
+Libs: -L${libdir} -lcedarx
+Cflags: -I${includedir}
