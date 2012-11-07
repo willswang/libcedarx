@@ -29,6 +29,8 @@
 #define MAX_SUPPORTED_OUTPUT_HEIGHT         2160
 #define MAX_SUPPORTED_DISPLAY_NUM           2
 
+#define DECODE_USE_ASYNC_THREAD             1
+
 typedef struct STREAM_FRAME_T stream_frame_t;
 struct STREAM_FRAME_T
 {
@@ -63,8 +65,10 @@ typedef struct
     stream_fifo_t frame_fifo;
     stream_queue_t frame_queue;    
     pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    sem_t sem;
+#ifdef DECODE_USE_ASYNC_THREAD
+    sem_t sem_put;
+    sem_t sem_get;
+#endif
 }vbv_t;
 
 typedef enum
@@ -99,9 +103,11 @@ typedef struct
     display_queue_t decoded_queue;
     display_queue_t display_queue;
     display_frame_t frames[FBM_MAX_FRAME_NUM];
-    u32 first;
     pthread_mutex_t mutex;
+#ifdef DECODE_USE_ASYNC_THREAD
+    u32 first;
     sem_t sem;
+#endif
 }fbm_t;
 
 typedef struct
@@ -119,15 +125,10 @@ typedef struct
 {
     int fd;
     int num;
-    struct {
-        int enable;
-        int screen;
-        int layer;
-        int start;
-        int init;
-        int top;
-        int last_id;
-    } info[MAX_SUPPORTED_DISPLAY_NUM];
+    int layer;
+    int start;
+    int init;
+    int last_id;
     pthread_mutex_t mutex;
 }cedarx_display_t;
 
@@ -369,7 +370,7 @@ static void vbv_enqueue_tail(stream_frame_t* stream, stream_queue_t* q)
       else
       {
           q->head = stream;
-          q->head->next = NULL;
+          stream->next = NULL;
       }
       q->frame_num++;
     }
@@ -434,8 +435,10 @@ static Handle vbv_init(void)
       vbv->frame_queue.head      = NULL;
 
       pthread_mutex_init(&vbv->mutex, NULL);
-      pthread_cond_init(&vbv->cond, NULL);
-      sem_init(&vbv->sem, 0, 0);
+#ifdef DECODE_USE_ASYNC_THREAD
+      sem_init(&vbv->sem_get, 0, 0);
+      sem_init(&vbv->sem_put, 0, 10);
+#endif
       return (Handle)vbv;
     }
 
@@ -448,8 +451,10 @@ static void vbv_exit(Handle h)
 
     if (vbv)
     {
-        sem_destroy(&vbv->sem);
-        pthread_cond_destroy(&vbv->cond);
+#ifdef DECODE_USE_ASYNC_THREAD
+        sem_destroy(&vbv->sem_put);
+        sem_destroy(&vbv->sem_get);
+#endif
         pthread_mutex_destroy(&vbv->mutex);
 
         if (vbv->frame_fifo.in_frames)
@@ -505,9 +510,11 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
         return CEDARX_RESULT_VBV_BUFFER_NO_ENOUGH;
     } 
     
+#ifdef DECODE_USE_ASYNC_THREAD
+    sem_wait(&vbv->sem_put);        
+#endif
     pthread_mutex_lock(&vbv->mutex);
-    if(vbv->frame_queue.frame_num > 10)
-        pthread_cond_wait(&vbv->cond, &vbv->mutex);
+
     new_write_addr = vbv->write_addr + stream->length;
     if (new_write_addr > vbv->vbv_buf_end)
     { 
@@ -524,6 +531,7 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     frame->vstream.data = vbv->write_addr;
     frame->vstream.length = stream->length;
     frame->vstream.pts = stream->pts;
+    frame->vstream.pcr = stream->pcr;
     frame->vstream.valid = stream->valid;
     write_index ++;
     if (write_index >= vbv->frame_fifo.max_frame_num)
@@ -536,7 +544,10 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     vbv->write_addr = new_write_addr;
     vbv_enqueue_tail(frame, &vbv->frame_queue);     //* add this frame to the queue tail.
     pthread_mutex_unlock(&vbv->mutex);
-    sem_post(&vbv->sem);        
+#ifdef DECODE_USE_ASYNC_THREAD
+    sem_post(&vbv->sem_get);
+    pthread_yield(); 
+#endif
     return CEDARX_RESULT_OK;
 }
 
@@ -548,7 +559,9 @@ static vstream_data_t* vbv_request_stream_frame(Handle h)
 
     if (vbv)
     {
-        sem_wait(&vbv->sem);        
+#ifdef DECODE_USE_ASYNC_THREAD
+        sem_wait(&vbv->sem_get);        
+#endif
         pthread_mutex_lock(&vbv->mutex);
         frame = vbv_dequeue(&vbv->frame_queue);
         if (frame) {
@@ -561,8 +574,11 @@ static vstream_data_t* vbv_request_stream_frame(Handle h)
         if (!stream){
             printf("Fatal Error: corrupt queue at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
         }
-        pthread_cond_signal(&vbv->cond);
+        
         pthread_mutex_unlock(&vbv->mutex);
+#ifdef DECODE_USE_ASYNC_THREAD
+        sem_post(&vbv->sem_put);        
+#endif
     }
     
     return stream;
@@ -590,7 +606,9 @@ static void vbv_return_stream_frame(vstream_data_t* stream, Handle h)
         id =( vbv->frame_fifo.read_index + delta) % vbv->frame_fifo.max_frame_num;
         vbv_enqueue_head(&vbv->frame_fifo.in_frames[id], &vbv->frame_queue);
         pthread_mutex_unlock(&vbv->mutex);
-        sem_post(&vbv->sem);        
+#ifdef DECODE_USE_ASYNC_THREAD
+        sem_post(&vbv->sem_get);        
+#endif
       }
     }
 }
@@ -944,10 +962,14 @@ static Handle fbm_init(u32 max_frame_num,
           for(j = fbm->max_frame_num; j < i; j++)
           {
               fbm_enqueue(&fbm->empty_queue, &fbm->frames[i]);
+#ifdef DECODE_USE_ASYNC_THREAD
               sem_post(&fbm->sem);
+#endif
           }
           fbm->max_frame_num = j;
+#ifdef DECODE_USE_ASYNC_THREAD
           fbm->first = 0;
+#endif
       }    
   } else {
       fbm = (fbm_t*) mem_alloc(sizeof(fbm_t));
@@ -994,9 +1016,11 @@ static Handle fbm_init(u32 max_frame_num,
           fbm_enqueue(&fbm->empty_queue, &fbm->frames[i]);
       }
 
-      fbm->first = 0;
       pthread_mutex_init(&fbm->mutex, NULL);
+#ifdef DECODE_USE_ASYNC_THREAD
       sem_init(&fbm->sem, 0, fbm->max_frame_num);
+      fbm->first = 0;
+#endif
       cedarx_fbm = fbm;
   }
   
@@ -1009,7 +1033,9 @@ static void fbm_free(void)
     fbm_t*  fbm = cedarx_fbm;
   
     if(fbm) {
+#ifdef DECODE_USE_ASYNC_THREAD
       sem_destroy(&fbm->sem);
+#endif
       pthread_mutex_destroy(&fbm->mutex);
     
       for(i = 0; i < fbm->max_frame_num; i++)
@@ -1037,28 +1063,28 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
   fbm = (fbm_t*)h;
   
   if(fbm) {
+#ifdef DECODE_USE_ASYNC_THREAD
     if (fbm->first) {
-    sem_wait(&fbm->sem);
+    	sem_wait(&fbm->sem);
     } else {
         sem_trywait(&fbm->sem);
     }
+#endif
     pthread_mutex_lock(&fbm->mutex);
     frame_info = fbm_dequeue(&fbm->empty_queue);
     if(frame_info != NULL)
     {
         frame_info->status = FS_DECODER_USING;
         picture = &frame_info->picture;
-        if (!picture){
-            printf("Fatal Error: corrupt queue at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
-        }
     } else {
+#ifdef DECODE_USE_ASYNC_THREAD
         if (!fbm->first) {
             fbm->first = 1;
         } else {
-        printf("Fatal Error: mismatch queue with semapore at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
+            printf("Fatal Error: mismatch queue with semapore at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
+        }
+#endif
     } 
-    
-    }
     
     pthread_mutex_unlock(&fbm->mutex);
   }
@@ -1092,7 +1118,9 @@ static void fbm_return_decoder_frame(vpicture_t* frame, u8 valid, Handle h)
             {
                 frame_info->status = FS_EMPTY;
                 fbm_enqueue(&fbm->empty_queue, frame_info);
+#ifdef DECODE_USE_ASYNC_THREAD
                 sem_post(&fbm->sem);
+#endif
             }
             break;
           case FS_DECODER_SHARE_PLAYER_USING:
@@ -1104,7 +1132,9 @@ static void fbm_return_decoder_frame(vpicture_t* frame, u8 valid, Handle h)
           case FS_DECODER_SHARE_DISCARD:
             frame_info->status = FS_EMPTY;
             fbm_enqueue(&fbm->empty_queue, frame_info);
+#ifdef DECODE_USE_ASYNC_THREAD
             sem_post(&fbm->sem);
+#endif
             break;
           default:
             break;
@@ -1188,7 +1218,9 @@ static void fbm_return_display_frame(u32 idx)
           case FS_PLAYER_USING:
             frame_info->status = FS_EMPTY;
             fbm_enqueue(&fbm->empty_queue, frame_info);
+#ifdef DECODE_USE_ASYNC_THREAD
             sem_post(&fbm->sem);
+#endif
             break;
           case FS_DECODER_SHARE_PLAYER_USING:
             frame_info->status = FS_DECODER_SHARE_DISCARD;
@@ -1248,7 +1280,9 @@ static void fbm_flush_display_frame(u32 idx)
           case FS_DISPLAY_USING:
             frame_info->status = FS_EMPTY;
             fbm_enqueue(&fbm->empty_queue, frame_info);
+#ifdef DECODE_USE_ASYNC_THREAD
             sem_post(&fbm->sem);
+#endif
             break;
           case FS_DECODER_SHARE_DISPLAY_USING:
             frame_info->status = FS_DECODER_SHARE_DISCARD;
@@ -1436,7 +1470,8 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   stream_info.video_height = info->height;
   stream_info.frame_rate = info->frame_rate;
   stream_info.frame_duration = info->frame_duration;
-  stream_info.aspec_ratio = 0;
+  stream_info.aspec_ratio = 1000;
+
 
   if (info->data && (info->data_size > 0)) {
     decoder->init_data = mem_alloc(info->data_size);
@@ -1536,6 +1571,9 @@ cedarx_result_e libcedarx_decoder_decode_stream(void)
     return CEDARX_RESULT_NO_INIT;
 
   res = libve_decode(0, 0, 0, decoder->ve);
+#ifdef DECODE_USE_ASYNC_THREAD
+  pthread_yield();
+#endif
   switch (res) {
     case VRESULT_OK:  
     case VRESULT_FRAME_DECODED:  
@@ -1574,7 +1612,6 @@ cedarx_result_e libcedarx_decoder_flush(void)
 
 cedarx_result_e libcedarx_display_open(void)
 {
-    int i;
     cedarx_display_t* display;
     
     if (!cedarx_decoder)
@@ -1594,14 +1631,10 @@ cedarx_result_e libcedarx_display_open(void)
         return CEDARX_RESULT_DE_FAILED; 
     }
 
-    for (i = 0; i < MAX_SUPPORTED_DISPLAY_NUM; i ++) {
-        display->info[i].enable = 0;
-        display->info[i].start = 0;
-        display->info[i].init = 0;
-        display->info[i].top = 0;
-        display->info[i].screen = -1;
-        display->info[i].layer = -1;
-    }
+    display->start = 0;
+    display->init = 0;
+    display->layer = -1;
+
     pthread_mutex_init(&display->mutex, NULL);
    
     return CEDARX_RESULT_OK; 
@@ -1609,34 +1642,31 @@ cedarx_result_e libcedarx_display_open(void)
 
 void libcedarx_display_close(void)
 {
-    int i;
     unsigned long args[4];
     cedarx_display_t* display = cedarx_display;
 
     if (display) {
-        pthread_mutex_lock(&display->mutex);
-        for (i = 0; i < MAX_SUPPORTED_DISPLAY_NUM; i ++) {
-            if (display->info[i].enable) {
-                args[0] = display->info[i].screen;
-                args[1] = display->info[i].layer;
-                args[2] = 0;
-                args[3] = 0;
-                if (display->info[i].init) {
-                    if (display->info[i].start) {
-                        while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->info[i].last_id) {
-                            usleep(10000);    
-                        } 
-                        fbm_flush_display_frame(display->info[i].last_id);
-                    }
-            
-                    ioctl(display->fd, DISP_CMD_VIDEO_STOP, args);
-                    ioctl(display->fd, DISP_CMD_LAYER_CLOSE, args );
+        if (display->layer != -1) {
+            pthread_mutex_lock(&display->mutex);
+            args[0] = 0;
+            args[1] = display->layer;
+            args[2] = 0;
+            args[3] = 0;
+            if (display->init) {
+                if (display->start) {
+                    while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->last_id) {
+                        usleep(1000);    
+                    } 
+                    fbm_flush_display_frame(display->last_id);
                 }
-                
-                ioctl(display->fd, DISP_CMD_LAYER_RELEASE, args);
+            
+                ioctl(display->fd, DISP_CMD_VIDEO_STOP, args);
+                ioctl(display->fd, DISP_CMD_LAYER_CLOSE, args );
             }
+            
+            ioctl(display->fd, DISP_CMD_LAYER_RELEASE, args);
+            pthread_mutex_unlock(&display->mutex);
         }
-        pthread_mutex_unlock(&display->mutex);
 
         pthread_mutex_destroy(&display->mutex);
         close(display->fd);
@@ -1645,94 +1675,68 @@ void libcedarx_display_close(void)
         fbm_free();
         mem_exit();
     }
-
 }
 
-cedarx_result_e libcedarx_display_request_layer(int screen, int top)
+cedarx_result_e libcedarx_display_request_layer(void)
 {
-    int i;
     cedarx_display_t* display = cedarx_display;
     unsigned long args[4];
 
-    if (!display) 
+    if (!display || (display->layer != -1))
         return CEDARX_RESULT_NO_INIT;
-    
-    if (screen >= MAX_SUPPORTED_DISPLAY_NUM)
-        return CEDARX_RESULT_NO_RESOURCE;
-
-    if (display->num >= MAX_SUPPORTED_DISPLAY_NUM)
-        return CEDARX_RESULT_NO_RESOURCE;
+        
+    if (display->layer != -1)
+        return CEDARX_RESULT_NO_INIT;
         
     pthread_mutex_lock(&display->mutex);
-    args[0] = screen;
+    args[0] = 0;
     args[1] = DISP_LAYER_WORK_MODE_SCALER;
     args[2] = 0;
     args[3] = 0;
-    for (i = 0; i < MAX_SUPPORTED_DISPLAY_NUM; i ++) {
-        if (!display->info[i].enable) {
-            display->info[i].screen = screen;
-            display->info[i].layer = ioctl(display->fd, DISP_CMD_LAYER_REQUEST, args);
-            display->info[i].enable = 1;
-            display->info[i].top = top;
-            display->num ++;
-            break;
-        }
-    }
+    display->layer = ioctl(display->fd, DISP_CMD_LAYER_REQUEST, args);
     pthread_mutex_unlock(&display->mutex);
     
     return CEDARX_RESULT_OK; 
 }
 
-void libcedarx_display_release_layer(int screen)
+void libcedarx_display_release_layer(void)
 {
-    int i;
     unsigned long args[4];
     cedarx_display_t* display = cedarx_display;
 
-    if (display) {
-        pthread_mutex_lock(&display->mutex);
-        for (i = 0; i < MAX_SUPPORTED_DISPLAY_NUM; i ++) {
-            if (display->info[i].enable) {
-                if (display->info[i].screen == screen) {
-                    display->info[i].enable = 0;
-                    args[0] = display->info[i].screen;
-                    args[1] = display->info[i].layer;
-                    args[2] = 0;
-                    args[3] = 0;
-                    if (display->info[i].init) {
-                        if (display->info[i].start) {
-                            while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->info[i].last_id) {
-                                usleep(10000);    
-                            } 
-                            fbm_flush_display_frame(display->info[i].last_id);
-                            display->info[i].start = 0;
-                        }
-                
-                        ioctl(display->fd, DISP_CMD_VIDEO_STOP, args);
-                        ioctl(display->fd, DISP_CMD_LAYER_CLOSE, args );
-                        display->info[i].init = 0;
-                    }
-                    
-                    ioctl(display->fd, DISP_CMD_LAYER_RELEASE, args);
-                    display->info[i].screen = -1;
-                    display->info[i].layer = -1;
-                    display->num --;
-                    break;
-                }
-            }            
-        }
-        pthread_mutex_unlock(&display->mutex);
+    if (display && (display->layer != -1)) {
+         pthread_mutex_lock(&display->mutex);
+         args[0] = 0;
+         args[1] = display->layer;
+         args[2] = 0;
+         args[3] = 0;
+         if (display->init) {
+             if (display->start) {
+                 while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->last_id) {
+                     usleep(1000);    
+                 } 
+                 fbm_flush_display_frame(display->last_id);
+                 display->start = 0;
+             }
+         
+             ioctl(display->fd, DISP_CMD_VIDEO_STOP, args);
+             ioctl(display->fd, DISP_CMD_LAYER_CLOSE, args );
+             display->init = 0;
+         }
+         
+         ioctl(display->fd, DISP_CMD_LAYER_RELEASE, args);
+         display->layer = -1;
+         pthread_mutex_unlock(&display->mutex);
     }
 }
 
 cedarx_result_e libcedarx_display_video_frame(int idx)
 {
-    int i;
     unsigned long args[4];
     vpicture_t* picture;
     cedarx_display_t* display = cedarx_display;
 
-    if (!display) 
+    if ((!display) || (display->layer == -1))
         return CEDARX_RESULT_NO_INIT;
 
     picture = fbm_get_picture(idx);
@@ -1740,103 +1744,95 @@ cedarx_result_e libcedarx_display_video_frame(int idx)
         return CEDARX_RESULT_INVALID_ARGS;
 
     pthread_mutex_lock(&display->mutex);
-    for (i = 0; i < MAX_SUPPORTED_DISPLAY_NUM; i ++) {
-        if (display->info[i].enable) {
-            if (!display->info[i].init) {
-                __disp_layer_info_t layer_info;
-                u32 disp_width, disp_height;
-                u32 screen_width, screen_height;
-                args[0] = display->info[i].screen;
-                args[1] = 0;
-                args[2] = 0;
-                args[3] = 0;
-                screen_width = ioctl(display->fd, DISP_CMD_SCN_GET_WIDTH, args);
-                screen_height = ioctl(display->fd, DISP_CMD_SCN_GET_HEIGHT, args);
-                
-                memset(&layer_info, 0, sizeof(layer_info));
-                
-                layer_info.mode = DISP_LAYER_WORK_MODE_SCALER;
-                layer_info.fb.mode = DISP_MOD_MB_UV_COMBINED;
-                layer_info.fb.format = DISP_FORMAT_YUV420;
-                layer_info.fb.seq = DISP_SEQ_UVUV;
-                layer_info.fb.br_swap = 0;
-                layer_info.fb.addr[0] = mem_phy_addr((u32)picture->y);
-                layer_info.fb.addr[1] = mem_phy_addr((u32)picture->u);
-                
-                if (picture->height < 720) {
-                  layer_info.fb.cs_mode = DISP_BT601;
-                } else {
-                  layer_info.fb.cs_mode = DISP_BT709;
-                }
-                
-
-                layer_info.src_win.x = picture->top_offset;
-                layer_info.src_win.y = picture->left_offset;
-                layer_info.src_win.width = picture->display_width;
-                layer_info.src_win.height = picture->display_height;
-                layer_info.fb.size.width = picture->width;
-                layer_info.fb.size.height = picture->height; 
-                       
-                if (screen_width * picture->display_height / picture->display_width > screen_height) {
-                    disp_width = screen_height * picture->display_width / picture->display_height;
-                    disp_height = screen_height;
-                } else {
-                    disp_width = screen_width;
-                    disp_height = screen_width * picture->display_height / picture->display_width;
-                }
-                
-                layer_info.scn_win.x = (screen_width - disp_width) / 2;
-                layer_info.scn_win.y = (screen_height - disp_height) / 2;
-                layer_info.scn_win.width = disp_width;
-                layer_info.scn_win.height = disp_height;
-                layer_info.pipe = 1;
-                
-                args[0] = display->info[i].screen;
-                args[1] = display->info[i].layer;
-                args[2] = (unsigned long)(&layer_info);
-                args[3] = 0;
-                ioctl(display->fd, DISP_CMD_LAYER_SET_PARA, args);
-                if (display->info[i].top)
-                    ioctl(display->fd, DISP_CMD_LAYER_TOP, args );
-                else
-                    ioctl(display->fd, DISP_CMD_LAYER_BOTTOM, args );
-                ioctl(display->fd, DISP_CMD_LAYER_OPEN, args );
-                ioctl(display->fd, DISP_CMD_VIDEO_START, args);
-                display->info[i].last_id = idx;
-                display->info[i].init = 1;
-            } else {
-                __disp_video_fb_t video;
-                args[0] = display->info[i].screen;
-                args[1] = display->info[i].layer;
-                args[2] = 0;
-                args[3] = 0;
-                if (display->info[i].start) {
-                    while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->info[i].last_id) {
-                        usleep(10000);    
-                    } 
-                    fbm_flush_display_frame(display->info[i].last_id);
-                } else {
-                    display->info[i].start = 1;
-                }
-            
-                memset(&video, 0, sizeof(__disp_video_fb_t));
-                video.id = idx;
-                video.interlace = picture->is_progressive ? 0 : 1;
-                video.top_field_first = picture->top_field_first ? 1 : 0;
-                video.frame_rate = picture->frame_rate;
-                video.addr[0] = mem_phy_addr((u32)picture->y);
-                video.addr[1] = mem_phy_addr((u32)picture->u);
-                
-                args[0] = display->info[i].screen;
-                args[1] = display->info[i].layer;
-                args[2] = (unsigned long)(&video);
-                args[3] = 0;
-                ioctl(display->fd, DISP_CMD_VIDEO_SET_FB, args);
-                fbm_share_display_frame(idx);
-                display->info[i].last_id = idx;
-            }
-        }    
+    if (!display->init) {
+        __disp_layer_info_t layer_info;
+        u32 disp_width, disp_height;
+        u32 screen_width, screen_height;
+        args[0] = 0;
+        args[1] = 0;
+        args[2] = 0;
+        args[3] = 0;
+        screen_width = ioctl(display->fd, DISP_CMD_SCN_GET_WIDTH, args);
+        screen_height = ioctl(display->fd, DISP_CMD_SCN_GET_HEIGHT, args);
+        
+        memset(&layer_info, 0, sizeof(layer_info));
+        
+        layer_info.mode = DISP_LAYER_WORK_MODE_SCALER;
+        layer_info.fb.mode = DISP_MOD_MB_UV_COMBINED;
+        layer_info.fb.format = DISP_FORMAT_YUV420;
+        layer_info.fb.seq = DISP_SEQ_UVUV;
+        layer_info.fb.br_swap = 0;
+        layer_info.fb.addr[0] = mem_phy_addr((u32)picture->y);
+        layer_info.fb.addr[1] = mem_phy_addr((u32)picture->u);
+        
+        if (picture->height < 720) {
+          layer_info.fb.cs_mode = DISP_BT601;
+        } else {
+          layer_info.fb.cs_mode = DISP_BT709;
+        }
+        
+        layer_info.src_win.x = picture->top_offset;
+        layer_info.src_win.y = picture->left_offset;
+        layer_info.src_win.width = picture->display_width;
+        layer_info.src_win.height = picture->display_height;
+        layer_info.fb.size.width = picture->width;
+        layer_info.fb.size.height = picture->height; 
+               
+        if (screen_width * picture->display_height / picture->display_width > screen_height) {
+            disp_width = screen_height * picture->display_width / picture->display_height;
+            disp_height = screen_height;
+        } else {
+            disp_width = screen_width;
+            disp_height = screen_width * picture->display_height / picture->display_width;
+        }
+        
+        layer_info.scn_win.x = (screen_width - disp_width) / 2;
+        layer_info.scn_win.y = (screen_height - disp_height) / 2;
+        layer_info.scn_win.width = disp_width;
+        layer_info.scn_win.height = disp_height;
+        
+        args[0] = 0;
+        args[1] = display->layer;
+        args[2] = (unsigned long)(&layer_info);
+        args[3] = 0;
+        ioctl(display->fd, DISP_CMD_LAYER_SET_PARA, args);
+        ioctl(display->fd, DISP_CMD_LAYER_TOP, args );
+        ioctl(display->fd, DISP_CMD_LAYER_OPEN, args );
+        ioctl(display->fd, DISP_CMD_VIDEO_START, args);
+        display->last_id = idx;
+        display->init = 1;
+    } else {
+        __disp_video_fb_t video;
+        args[0] = 0;
+        args[1] = display->layer;
+        args[2] = 0;
+        args[3] = 0;
+        if (display->start) {
+            while (ioctl(display->fd, DISP_CMD_VIDEO_GET_FRAME_ID, args) != display->last_id) {
+                usleep(1000);    
+            } 
+            fbm_flush_display_frame(display->last_id);
+        } else {
+            display->start = 1;
+        }
+    
+        memset(&video, 0, sizeof(__disp_video_fb_t));
+        video.id = idx;
+        //video.interlace = picture->is_progressive ? 0 : 1;
+        //video.top_field_first = picture->top_field_first ? 1 : 0;
+        video.frame_rate = picture->frame_rate;
+        video.addr[0] = mem_phy_addr((u32)picture->y);
+        video.addr[1] = mem_phy_addr((u32)picture->u);
+        
+        args[0] = 0;
+        args[1] = display->layer;
+        args[2] = (unsigned long)(&video);
+        args[3] = 0;
+        ioctl(display->fd, DISP_CMD_VIDEO_SET_FB, args);
+        fbm_share_display_frame(idx);
+        display->last_id = idx;
     }
+
     pthread_mutex_unlock(&display->mutex);
     return CEDARX_RESULT_OK; 
 }
