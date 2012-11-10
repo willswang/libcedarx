@@ -422,7 +422,7 @@ static Handle vbv_init(void)
       }
 
       vbv->vbv_buf     = vbv_buf;
-      vbv->vbv_buf_end = vbv_buf + VBV_FRAME_SIZE - 1;
+      vbv->vbv_buf_end = vbv_buf + VBV_FRAME_SIZE;
       vbv->max_size    = VBV_FRAME_SIZE;
       vbv->read_addr   = vbv_buf;
       vbv->write_addr  = vbv_buf;
@@ -439,7 +439,7 @@ static Handle vbv_init(void)
       pthread_mutex_init(&vbv->mutex, NULL);
 #ifdef DECODE_USE_ASYNC_THREAD
       sem_init(&vbv->sem_get, 0, 0);
-      sem_init(&vbv->sem_put, 0, 10);
+      sem_init(&vbv->sem_put, 0, 3);
 #endif
       return (Handle)vbv;
     }
@@ -501,13 +501,17 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     if (!stream || !vbv)
         return CEDARX_RESULT_NO_INIT;
     
+    if (vbv->frame_fifo.frame_num >= vbv->frame_fifo.max_frame_num) {
+        printf("Warning: The fifo is full!\n");
+        return CEDARX_RESULT_VBV_BUFFER_FULL;
+    }
+    
     if (vbv->valid_size >= vbv->max_size) {
         printf("Warning: The buffer is full!\n");
         return CEDARX_RESULT_VBV_BUFFER_FULL;
     }
 
-    if (stream->length >= vbv->max_size - vbv->valid_size) {
-        
+    if (stream->length + vbv->valid_size > vbv->max_size) {
         printf("Warning: There are not enough memory!\n");
         return CEDARX_RESULT_VBV_BUFFER_NO_ENOUGH;
     } 
@@ -518,7 +522,7 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     pthread_mutex_lock(&vbv->mutex);
 
     new_write_addr = vbv->write_addr + stream->length;
-    if (new_write_addr > vbv->vbv_buf_end)
+    if (new_write_addr >= vbv->vbv_buf_end)
     { 
       u32 size = vbv->vbv_buf_end - vbv->write_addr;
       mem_cpy(vbv->write_addr, stream->data, size);
@@ -530,11 +534,8 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
           
     write_index = vbv->frame_fifo.write_index;
     frame = &vbv->frame_fifo.in_frames[write_index];
+    mem_cpy(&frame->vstream, stream, sizeof(vstream_data_t));
     frame->vstream.data = vbv->write_addr;
-    frame->vstream.length = stream->length;
-    frame->vstream.pts = stream->pts;
-    frame->vstream.pcr = stream->pcr;
-    frame->vstream.valid = stream->valid;
     write_index ++;
     if (write_index >= vbv->frame_fifo.max_frame_num)
     {
@@ -573,10 +574,6 @@ static vstream_data_t* vbv_request_stream_frame(Handle h)
             printf("Fatal Error: mismatch queue with semapore at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
         }
         
-        if (!stream){
-            printf("Fatal Error: corrupt queue at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
-        }
-        
         pthread_mutex_unlock(&vbv->mutex);
 #ifdef DECODE_USE_ASYNC_THREAD
         sem_post(&vbv->sem_put);        
@@ -594,7 +591,7 @@ static void vbv_return_stream_frame(vstream_data_t* stream, Handle h)
     
     if (vbv)
     {
-      if (vbv->frame_fifo.frame_num)
+      if (vbv->frame_fifo.frame_num > 0)
       {
         pthread_mutex_lock(&vbv->mutex);
         
@@ -623,7 +620,7 @@ static void vbv_flush_stream_frame(vstream_data_t* stream, Handle h)
 
     if (vbv)
     {
-      if (vbv->frame_fifo.frame_num)
+      if (vbv->frame_fifo.frame_num > 0)
       {
         pthread_mutex_lock(&vbv->mutex);
         read_index = vbv->frame_fifo.read_index;
@@ -639,7 +636,7 @@ static void vbv_flush_stream_frame(vstream_data_t* stream, Handle h)
           vbv->frame_fifo.frame_num--;
           vbv->valid_size -= stream->length;
           new_write_addr = vbv->read_addr + stream->length;
-          if (new_write_addr > vbv->vbv_buf_end)
+          if (new_write_addr >= vbv->vbv_buf_end)
           {
               new_write_addr  -= vbv->max_size;
           }
