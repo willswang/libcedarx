@@ -9,7 +9,7 @@
 #include <sys/ioctl.h>
 #include <errno.h>
 
-#include "cdxalloc.h"
+#include "avheap.h"
 #include "libve_typedef.h"
 #include "libve.h"
 #include "libve_adapter.h"
@@ -138,12 +138,14 @@ static cedarx_display_t *cedarx_display = NULL;
 
 static void mem_init(void)
 {
-    cdxalloc_open();
+  cedarx_decoder_t* decoder = cedarx_decoder;
+  if (decoder && decoder->fd != -1)
+    av_heap_init(decoder->fd);
 }
 
 static void mem_exit(void)
 {
-    cdxalloc_close();
+  av_heap_release();
 }
 
 static void* mem_alloc(u32 size)
@@ -158,12 +160,12 @@ static void  mem_free(void* p)
 
 void* mem_palloc(u32 size, u32 align)
 {
-  return (void*)cdxalloc_alloc(size); 
+  return (void*)av_heap_alloc(size); 
 }
 
 void mem_pfree(void* p)
 {
-  cdxalloc_free(p); 
+  av_heap_free(p); 
 }
 
 static void  mem_set(void* mem, u32 value, u32 size)
@@ -183,7 +185,7 @@ static void  mem_flush_cache(u8* mem, u32 size)
 static u32 mem_phy_addr(u32 virtual_addr)
 {
   if (virtual_addr) 
-    return cdxalloc_vir2phy((void*)virtual_addr);
+    return av_heap_physic_addr((void*)virtual_addr);
   
   return 0;
 }

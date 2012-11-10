@@ -5,7 +5,7 @@ set -x
 aclocal
 autoconf
 autoheader
-libtoolize --automake --copy --force
+libtoolize --copy --force
 automake --foreign --add-missing --copy
 
 
