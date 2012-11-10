@@ -143,7 +143,7 @@ void libcedarx_decoder_close(void);
 cedarx_result_e libcedarx_decoder_add_stream(u8* buf, u32 size, u64 pts, u64 pcr);
 cedarx_result_e libcedarx_decoder_decode_stream(void);
 cedarx_result_e libcedarx_decoder_flush(void);
-cedarx_result_e libcedarx_display_open(void);
+cedarx_result_e libcedarx_display_open(u32 width, u32 height);
 void libcedarx_display_close(void);
 cedarx_result_e libcedarx_display_request_layer(void);
 void libcedarx_display_release_layer(void);

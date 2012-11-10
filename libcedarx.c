@@ -129,6 +129,8 @@ typedef struct
     int start;
     int init;
     int last_id;
+    u32 visible_width;
+    u32 visible_height;
     pthread_mutex_t mutex;
 }cedarx_display_t;
 
@@ -1607,7 +1609,7 @@ cedarx_result_e libcedarx_decoder_flush(void)
   return CEDARX_RESULT_OK;
 }
 
-cedarx_result_e libcedarx_display_open(void)
+cedarx_result_e libcedarx_display_open(u32 width, u32 height)
 {
     cedarx_display_t* display;
     
@@ -1632,6 +1634,8 @@ cedarx_result_e libcedarx_display_open(void)
     display->init = 0;
     display->layer = -1;
 
+    display->visible_width = width;
+    display->visible_height = height;
     pthread_mutex_init(&display->mutex, NULL);
    
     return CEDARX_RESULT_OK; 
@@ -1774,14 +1778,18 @@ cedarx_result_e libcedarx_display_video_frame(int idx)
         layer_info.src_win.height = picture->display_height;
         layer_info.fb.size.width = picture->width;
         layer_info.fb.size.height = picture->height; 
+                if (!display->visible_width || !display->visible_height) {
+                    display->visible_width = picture->display_width;
+                    display->visible_height = picture->display_height;
+                }
                
-        if (screen_width * picture->display_height / picture->display_width > screen_height) {
-            disp_width = screen_height * picture->display_width / picture->display_height;
-            disp_height = screen_height;
-        } else {
-            disp_width = screen_width;
-            disp_height = screen_width * picture->display_height / picture->display_width;
-        }
+                if (screen_width * display->visible_height / display->visible_width > screen_height) {
+                    disp_width = screen_height * display->visible_width / display->visible_height;
+                    disp_height = screen_height;
+                } else {
+                    disp_width = screen_width;
+                    disp_height = screen_width * display->visible_height / display->visible_width;
+                }
         
         layer_info.scn_win.x = (screen_width - disp_width) / 2;
         layer_info.scn_win.y = (screen_height - disp_height) / 2;
