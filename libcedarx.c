@@ -1164,7 +1164,7 @@ static void fbm_share_decoder_frame(vpicture_t* frame, Handle h)
     }
 }
 
-static vpicture_t* fbm_get_picture(u32 id)
+static vpicture_t* fbm_retrieve_picture(u32 id)
 {
     u8 i;
     fbm_t* fbm = cedarx_fbm;
@@ -1311,7 +1311,6 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   vstream_info_t stream_info;
   cedarx_decoder_t* decoder;
   
-
   if (!info) 
     return CEDARX_RESULT_INVALID_ARGS;
     
@@ -1470,7 +1469,6 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   stream_info.frame_rate = info->frame_rate;
   stream_info.frame_duration = info->frame_duration;
   stream_info.aspec_ratio = 1000;
-
 
   if (info->data && (info->data_size > 0)) {
     decoder->init_data = mem_alloc(info->data_size);
@@ -1738,7 +1736,7 @@ cedarx_result_e libcedarx_display_video_frame(int idx)
     if ((!display) || (display->layer == -1))
         return CEDARX_RESULT_NO_INIT;
 
-    picture = fbm_get_picture(idx);
+    picture = fbm_retrieve_picture(idx);
     if (!picture)
         return CEDARX_RESULT_INVALID_ARGS;
 
@@ -1836,7 +1834,8 @@ cedarx_result_e libcedarx_display_video_frame(int idx)
     return CEDARX_RESULT_OK; 
 }
 
-cedarx_result_e libcedarx_display_request_frame(cedarx_picture_t* picture)
+cedarx_result_e libcedarx_display_request_frame(u32 *id, 
+            u64 *pts, u32 *frame_rate, u32 *width, u32 *height)
 {
   vpicture_t* vpicture = NULL;
 
@@ -1844,21 +1843,11 @@ cedarx_result_e libcedarx_display_request_frame(cedarx_picture_t* picture)
   if (!vpicture) 
     return CEDARX_RESULT_NO_DISPLAY_BUFFER;
   
-  mem_set(picture, 0, sizeof(cedarx_picture_t));
-  picture->width = vpicture->width;   
-  picture->height = vpicture->height;
-  picture->top_offset = vpicture->top_offset;
-  picture->left_offset = vpicture->left_offset;   
-  picture->display_width = vpicture->display_width;
-  picture->display_height = vpicture->display_height; 
-  picture->id = vpicture->id;
-  picture->interlaced = vpicture->is_progressive ? 0 : 1;
-  picture->top_field_first = vpicture->top_field_first;
-  picture->repeat_top_field = vpicture->repeat_top_field;
-  picture->repeat_bottom_field = vpicture->repeat_bottom_field;
-  picture->pts = vpicture->pts;
-  picture->pcr = vpicture->pcr;
-  picture->frame_rate = vpicture->frame_rate;
+  *id = vpicture->id;
+  *pts = vpicture->pts;
+  *width = vpicture->width;   
+  *height = vpicture->height;
+  *frame_rate = vpicture->frame_rate;
   
   return CEDARX_RESULT_OK;
 }

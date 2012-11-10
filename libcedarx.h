@@ -137,24 +137,6 @@ typedef struct
     u8* data;
     u32 data_size;
 }cedarx_info_t;
-   
-typedef struct
-{
-    u32 id;
-    u32 width;
-    u32 height;
-    u32 top_offset;
-    u32 left_offset;
-    u32 display_width;
-    u32 display_height;
-    u8 interlaced;
-    u8 top_field_first;
-    u8 repeat_top_field;
-    u8 repeat_bottom_field;
-    u64 pts;
-    u64 pcr;
-    u32 frame_rate;
-}cedarx_picture_t;
 
 cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info);
 void libcedarx_decoder_close(void);
@@ -166,7 +148,8 @@ void libcedarx_display_close(void);
 cedarx_result_e libcedarx_display_request_layer(void);
 void libcedarx_display_release_layer(void);
 cedarx_result_e libcedarx_display_video_frame(int idx);
-cedarx_result_e libcedarx_display_request_frame(cedarx_picture_t* picture);
+cedarx_result_e libcedarx_display_request_frame(u32 *id, 
+            u64 *pts, u32 *frame_rate, u32 *width, u32 *height);
 cedarx_result_e libcedarx_display_return_frame(int id);
 char* libcedarx_version(void);
 
