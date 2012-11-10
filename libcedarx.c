@@ -1397,6 +1397,11 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
       stream_info.format = STREAM_FORMAT_H264;
       stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
       break;    
+    case CEDARX_STREAM_FORMAT_AVC1:
+      stream_info.format = STREAM_FORMAT_H264;
+      stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
+      stream_info.is_pts_correct = 1;
+      break;    
     case CEDARX_STREAM_FORMAT_VC1:
       stream_info.format = STREAM_FORMAT_VC1;
       stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
