@@ -126,9 +126,32 @@ typedef enum CEDARV_PIXEL_FORMAT
     CEDARX_PIXEL_FORMAT_AW_YUV422	= 0x11,
     CEDARX_PIXEL_FORMAT_AW_YUV411  = 0x12
 }cedarx_pixel_format_e;
+
+typedef struct {
+	u32 width;					
+	u32 height;					
+    u32 top_offset;				
+    u32 left_offset;			
+    u32 display_width;			
+    u32 display_height;			
+	u32 size_y[2];
+	u32 size_u[2];
+	u32 size_v[2];
+	u32 size_alpha[2];
+	u8* y[2];                      
+	u8* u[2];                      
+	u8* v[2];                      
+	u8* alpha[2];
+	u64 pts;
+	u32 frame_rate;
+	u8 is_progressive;
+	u8 top_field_first;    
+	u8 repeat_top_field;   
+	u8 repeat_bottom_field;
+    Handle sys;
+}cedarx_picture_t;
    
-typedef struct
-{
+typedef struct {
     cedarx_stream_format_e stream;
     cedarx_container_format_e container;
     u32 frame_rate;
@@ -137,21 +160,26 @@ typedef struct
     u32 height; 
     u8* data;
     u32 data_size;
+    Handle sys;
+    void (*request_buffer)(cedarx_picture_t * pic, void *sys);
+    void (*update_buffer)(cedarx_picture_t * pic, void *sys);
+    void (*release_buffer)(cedarx_picture_t * pic, void *sys);
+    void (*lock_buffer)(cedarx_picture_t * pic, void *sys);
+    void (*unlock_buffer)(cedarx_picture_t * pic, void *sys);    
 }cedarx_info_t;
 
 cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info);
 void libcedarx_decoder_close(void);
 cedarx_result_e libcedarx_decoder_add_stream(u8* buf, u32 size, u64 pts, u64 pcr);
-cedarx_result_e libcedarx_decoder_decode_stream(void);
-cedarx_result_e libcedarx_decoder_flush(void);
-cedarx_result_e libcedarx_display_open(u32 width, u32 height);
+cedarx_result_e libcedarx_decoder_decode_stream(int force);
+Handle libcedarx_decoder_request_frame(void);
+cedarx_result_e libcedarx_display_open(void);
 void libcedarx_display_close(void);
-cedarx_result_e libcedarx_display_request_layer(void);
+cedarx_result_e libcedarx_display_alloc_frame(cedarx_picture_t *picture);
+void libcedarx_display_free_frame(cedarx_picture_t *picture);
+cedarx_result_e libcedarx_display_request_layer(int top);
 void libcedarx_display_release_layer(void);
-cedarx_result_e libcedarx_display_video_frame(int idx);
-cedarx_result_e libcedarx_display_request_frame(u32 *id, 
-            u64 *pts, u32 *frame_rate, u32 *width, u32 *height);
-cedarx_result_e libcedarx_display_return_frame(int id);
+cedarx_result_e libcedarx_display_video_frame(cedarx_picture_t *picture);
 char* libcedarx_version(void);
 
 #ifdef __cplusplus

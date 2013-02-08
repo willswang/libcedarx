@@ -11,6 +11,5 @@ libcedarx_la_include_HEADERS = libcedarx.h
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libcedarx.pc
 AM_CFLAGS = -Wall
-
 install-data-hook:
-	$(INSTALL_DATA) libvecore.so $(libdir)/libvecore.so
+	$(INSTALL_DATA) libvecore.so $(DESTDIR)$(libdir)/
