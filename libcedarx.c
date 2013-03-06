@@ -1684,6 +1684,27 @@ cedarx_result_e libcedarx_display_video_frame(cedarx_picture_t *picture)
     return CEDARX_RESULT_OK; 
 }
 
+cedarx_result_e libcedarx_get_stream_info(cedarx_info_t *info)
+{
+	vstream_info_t vstream_info;
+	cedarx_decoder_t* decoder = cedarx_decoder;
+	vresult_e e;
+	if (decoder && decoder->ve) {
+			return CEDARX_RESULT_NO_RESOURCE;
+		if ((e = libve_get_stream_info(&vstream_info, decoder->ve))) {
+		}
+		info->width = vstream_info.video_width;
+		info->height = vstream_info.video_height;
+//		info->frame_rate = vstream_info.frame_rate;
+//		info->frame_duration = vstream_info.frame_duration;
+		return CEDARX_RESULT_OK;
+
+	}
+
+	return CEDARX_RESULT_NO_INIT;
+
+}
+
 char* libcedarx_version(void)
 {
     return LIBCEDARX_VERSION;
