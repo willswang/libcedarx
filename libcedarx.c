@@ -1690,8 +1690,9 @@ cedarx_result_e libcedarx_get_stream_info(cedarx_info_t *info)
 	cedarx_decoder_t* decoder = cedarx_decoder;
 	vresult_e e;
 	if (decoder && decoder->ve) {
-			return CEDARX_RESULT_NO_RESOURCE;
+			
 		if ((e = libve_get_stream_info(&vstream_info, decoder->ve))) {
+		      return CEDARX_RESULT_NO_RESOURCE;
 		}
 		info->width = vstream_info.video_width;
 		info->height = vstream_info.video_height;
