@@ -23,15 +23,11 @@
 #define VBV_MAX_FRAME_NUM                   64
 #define VBV_MIN_FRAME_NUM                   2
 #define FBM_MAX_FRAME_NUM                   64
-#define MAX_SUPPORTED_VIDEO_WIDTH           3840
-#define MAX_SUPPORTED_VIDEO_HEIGHT          2160
+#define MAX_SUPPORTED_VIDEO_WIDTH           1920
+#define MAX_SUPPORTED_VIDEO_HEIGHT          1088
 #define MAX_SUPPORTED_OUTPUT_WIDTH          1920
 #define MAX_SUPPORTED_OUTPUT_HEIGHT         1080
 
-#define offsetof(type, member) ((size_t) &((type *)0)->member)
-#define container_of(ptr, type, member) ({ \
-            const typeof( ((type *)0)->member ) *__mptr = (ptr); \
-            (type *)( (char *)__mptr - offsetof(type,member) );})
 
 typedef struct
 {
@@ -341,7 +337,7 @@ IVEControl_t IVE =
     ve_get_memtype
 };
 
-static void vbv_enqueue_head(stream_frame_t* stream, stream_queue_t* q)
+static void vbv_enqueue_head(stream_queue_t* q, stream_frame_t* stream)
 {
     if (q && stream) {
         stream->next = q->head;
@@ -350,7 +346,7 @@ static void vbv_enqueue_head(stream_frame_t* stream, stream_queue_t* q)
     }
 }
 
-static void vbv_enqueue_tail(stream_frame_t* stream, stream_queue_t* q)
+static void vbv_enqueue_tail(stream_queue_t* q, stream_frame_t* stream)
 {
     stream_frame_t* node;
     
@@ -520,7 +516,7 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     vbv->frame_fifo.frame_num++;
     vbv->valid_size += stream->length;
     vbv->write_addr = new_write_addr;
-    vbv_enqueue_tail(frame, &vbv->frame_queue);     //* add this frame to the queue tail.
+    vbv_enqueue_tail(&vbv->frame_queue, frame);     //* add this frame to the queue tail.
     pthread_mutex_unlock(&vbv->mutex);
     return CEDARX_RESULT_OK;
 }
@@ -556,7 +552,7 @@ static void vbv_return_stream_frame(vstream_data_t* stream, Handle h)
             for(i = 0; i < vbv->frame_fifo.max_frame_num; i++) {
                 frame = &vbv->frame_fifo.in_frames[i];
                 if (stream == &frame->vstream) {
-                    vbv_enqueue_head(frame, &vbv->frame_queue);
+                    vbv_enqueue_head(&vbv->frame_queue, frame);
                 }
             }
             pthread_mutex_unlock(&vbv->mutex);
@@ -617,7 +613,16 @@ IVBV_t IVBV =
     vbv_get_buffer_size
 };
 
-static void fbm_enqueue(display_queue_t* q, display_frame_t* frame)
+static void fbm_enqueue_head(display_queue_t* q, display_frame_t* frame)
+{
+    if (q && frame) {
+        frame->next = q->head;
+        q->head = frame;
+        q->frame_num++;
+    }
+}
+
+static void fbm_enqueue_tail(display_queue_t* q, display_frame_t* frame)
 {
     display_frame_t* node;
     
@@ -748,6 +753,43 @@ static void fbm_free_frame_buffer(cedarx_picture_t* picture)
 
 static s32 fbm_alloc_frame_buffer(cedarx_picture_t* picture)
 {
+    cedarx_decoder_t* decoder = cedarx_decoder;
+
+    if (decoder && decoder->fbm) {
+        fbm_t* fbm = decoder->fbm;
+        if (picture->size_y[0] < fbm->size_y[0])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_y[0], picture->size_y[0], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_u[0] < fbm->size_u[0])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_u[0], picture->size_u[0], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_v[0] < fbm->size_v[0])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_v[0], picture->size_v[0], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_alpha[0] < fbm->size_alpha[0])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_alpha[0], picture->size_alpha[0], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_y[1] < fbm->size_y[1])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_y[1], picture->size_y[1], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_u[1] < fbm->size_u[1])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_u[1], picture->size_u[1], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_v[1] < fbm->size_v[1])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_v[1], picture->size_v[1], __FILE__, __FUNCTION__, __LINE__);
+
+        if (picture->size_alpha[1] < fbm->size_alpha[1])
+            printf("Warning: need 0x%x bytes but just request 0x%x bytes at %s:%s:%d!!!!\n", \
+                fbm->size_alpha[1], picture->size_alpha[1], __FILE__, __FUNCTION__, __LINE__);
+    }
+
     if(picture->size_y[0]) {
         picture->y[0] = (u8*)mem_palloc(picture->size_y[0], 0);
         if(!picture->y[0]) 
@@ -828,12 +870,22 @@ static Handle fbm_init(u32 max_frame_num,
         fbm->size_u[1] = size_u[1];
     }
     
-    for(i = 0; i < max_frame_num; i++) {
-    	fbm->frames[i].vpicture.id = i;
-        fbm->frames[i].vpicture._3d_mode = fbm->mode;
-        fbm->frames[i].status = FS_EMPTY;
-        fbm_enqueue(&fbm->empty_queue, &fbm->frames[i]);
-        fbm->init_frame_num ++;
+    for(i = 0; i < FBM_MAX_FRAME_NUM; i++) {
+        fbm->frames[i].status                   = FS_EMPTY;
+    	fbm->frames[i].vpicture.id              = i;
+        fbm->frames[i].vpicture._3d_mode        = fbm->mode;
+        fbm->frames[i].vpicture.size_y          = fbm->size_y[0];
+        fbm->frames[i].vpicture.size_u          = fbm->size_u[0];
+        fbm->frames[i].vpicture.size_v          = fbm->size_v[0];
+        fbm->frames[i].vpicture.size_alpha      = fbm->size_alpha[0];
+        fbm->frames[i].vpicture.size_y2         = fbm->size_y[1];
+        fbm->frames[i].vpicture.size_u2         = fbm->size_u[1];
+        fbm->frames[i].vpicture.size_v2         = fbm->size_v[1];
+        fbm->frames[i].vpicture.size_alpha2     = fbm->size_alpha[1];
+        if(i < max_frame_num) {
+            fbm_enqueue_tail(&fbm->empty_queue, &fbm->frames[i]);
+            fbm->init_frame_num ++;
+        }
     }
     
     fbm->decoder = decoder;
@@ -876,14 +928,6 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
                 if (pic.sys) {
                     picture = &frame_info->picture;
                     vpicture = &frame_info->vpicture;
-                    vpicture->size_y        = pic.size_y[0];
-                    vpicture->size_u        = pic.size_u[0];
-                    vpicture->size_v        = pic.size_v[0];
-                    vpicture->size_alpha    = pic.size_alpha[0];
-                    vpicture->size_y2       = pic.size_y[1];
-                    vpicture->size_u2       = pic.size_u[1];
-                    vpicture->size_v2       = pic.size_v[1];
-                    vpicture->size_alpha2   = pic.size_alpha[1];
                     vpicture->y             = pic.y[0];
                     vpicture->u             = pic.u[0];
                     vpicture->v             = pic.v[0];
@@ -892,26 +936,10 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
                     vpicture->u2            = pic.u[1];
                     vpicture->v2            = pic.v[1];
                     vpicture->alpha2        = pic.alpha[1];
-                    picture->size_y[0]      = pic.size_y[0];
-                    picture->size_u[0]      = pic.size_u[0];
-                    picture->size_v[0]      = pic.size_v[0];
-                    picture->size_alpha[0]  = pic.size_alpha[0];
-                    picture->size_y[1]      = pic.size_y[1];
-                    picture->size_u[1]      = pic.size_u[1];
-                    picture->size_v[1]      = pic.size_v[1];
-                    picture->size_alpha[1]  = pic.size_alpha[1];
-                    picture->y[0]           = pic.y[0];
-                    picture->u[0]           = pic.u[0];
-                    picture->v[0]           = pic.v[0];
-                    picture->alpha[0]       = pic.alpha[0];
-                    picture->y[1]           = pic.y[1];
-                    picture->u[1]           = pic.u[1];
-                    picture->v[1]           = pic.v[1];
-                    picture->alpha[1]       = pic.alpha[1];
                     picture->sys            = pic.sys;
                     frame_info->status = FS_DECODER_USING;
                 } else {
-                    fbm_enqueue(&fbm->empty_queue, frame_info);
+                    fbm_enqueue_head(&fbm->empty_queue, frame_info);
                 }
             } else {
                 fbm->exhausted = 1;  
@@ -928,9 +956,6 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
                     if(!frame_info) {
                         if (fbm->init_frame_num < FBM_MAX_FRAME_NUM) {
                             frame_info = &fbm->frames[fbm->init_frame_num];
-                            frame_info->vpicture.id = fbm->init_frame_num;
-                            frame_info->vpicture._3d_mode = fbm->mode;
-                            frame_info->status = FS_EMPTY;
                             fbm->init_frame_num ++;
                         }
                     }
@@ -938,14 +963,6 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
                     if(frame_info) {
                         picture = &frame_info->picture;
                         vpicture = &frame_info->vpicture;
-                        vpicture->size_y        = pic.size_y[0];
-                        vpicture->size_u        = pic.size_u[0];
-                        vpicture->size_v        = pic.size_v[0];
-                        vpicture->size_alpha    = pic.size_alpha[0];
-                        vpicture->size_y2       = pic.size_y[1];
-                        vpicture->size_u2       = pic.size_u[1];
-                        vpicture->size_v2       = pic.size_v[1];
-                        vpicture->size_alpha2   = pic.size_alpha[1];
                         vpicture->y             = pic.y[0];
                         vpicture->u             = pic.u[0];
                         vpicture->v             = pic.v[0];
@@ -954,22 +971,6 @@ static vpicture_t* fbm_request_decoder_frame(Handle h)
                         vpicture->u2            = pic.u[1];
                         vpicture->v2            = pic.v[1];
                         vpicture->alpha2        = pic.alpha[1];
-                        picture->size_y[0]      = pic.size_y[0];
-                        picture->size_u[0]      = pic.size_u[0];
-                        picture->size_v[0]      = pic.size_v[0];
-                        picture->size_alpha[0]  = pic.size_alpha[0];
-                        picture->size_y[1]      = pic.size_y[1];
-                        picture->size_u[1]      = pic.size_u[1];
-                        picture->size_v[1]      = pic.size_v[1];
-                        picture->size_alpha[1]  = pic.size_alpha[1];
-                        picture->y[0]           = pic.y[0];
-                        picture->u[0]           = pic.u[0];
-                        picture->v[0]           = pic.v[0];
-                        picture->alpha[0]       = pic.alpha[0];
-                        picture->y[1]           = pic.y[1];
-                        picture->u[1]           = pic.u[1];
-                        picture->v[1]           = pic.v[1];
-                        picture->alpha[1]       = pic.alpha[1];
                         picture->sys            = pic.sys;
                         frame_info->status = FS_DECODER_USING;
                     } else {
@@ -1002,12 +1003,12 @@ static void fbm_return_decoder_frame(vpicture_t* frame, u8 valid, Handle h)
                     picture = &frame_info->picture;
                     if(valid) {
                         frame_info->status = FS_DECODER_DISCARD;
-                        fbm_enqueue(&fbm->decoded_queue, frame_info);
+                        fbm_enqueue_tail(&fbm->decoded_queue, frame_info);
                     } else {
                         if (fbm->decoder->release_buffer)
                             fbm->decoder->release_buffer(picture, fbm->decoder->sys);
                         frame_info->status = FS_BINDING;
-                        fbm_enqueue(&fbm->bind_queue, frame_info);
+                        fbm_enqueue_tail(&fbm->bind_queue, frame_info);
                     }
                     break;
                 case FS_DECODER_SHARED:
@@ -1018,9 +1019,12 @@ static void fbm_return_decoder_frame(vpicture_t* frame, u8 valid, Handle h)
                     if (fbm->decoder->unlock_buffer)
                         fbm->decoder->unlock_buffer(picture, fbm->decoder->sys);
                     frame_info->status = FS_BINDING;
-                    fbm_enqueue(&fbm->bind_queue, frame_info);
+                    fbm_enqueue_tail(&fbm->bind_queue, frame_info);
                     break;
                 default:
+                    printf("Fatal Error: invalid frame(%d) at %s:%s:%d!!!!\n", \
+                        frame_info->status, __FILE__, __FUNCTION__, __LINE__);
+                case FS_BINDING:
                     break;
             }
         }
@@ -1040,11 +1044,11 @@ static void fbm_share_decoder_frame(vpicture_t* frame, Handle h)
         if(idx < FBM_MAX_FRAME_NUM) {
             frame_info = &fbm->frames[idx];
             if (frame_info->status == FS_DECODER_USING) {
-                vpicture_t* vpicture = &frame_info->vpicture;
                 frame_info->status = FS_DECODER_SHARED;
-                fbm_enqueue(&fbm->decoded_queue, frame_info);
+                fbm_enqueue_tail(&fbm->decoded_queue, frame_info);
             } else {
-                printf("Fatal Error: invalid frame at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
+                printf("Fatal Error: invalid frame(%d) at %s:%s:%d!!!!\n", \
+                    frame_info->status, __FILE__, __FUNCTION__, __LINE__);
             }
         }
         pthread_mutex_unlock(&fbm->mutex);
@@ -1084,7 +1088,7 @@ static Handle fbm_request_display_frame(Handle h)
             switch (frame_info->status) {
                 case FS_DECODER_DISCARD:
                     frame_info->status = FS_BINDING;
-                    fbm_enqueue(&fbm->bind_queue, frame_info);
+                    fbm_enqueue_tail(&fbm->bind_queue, frame_info);
                     break;
                 case FS_DECODER_SHARED:
                     if (fbm->decoder->lock_buffer)
@@ -1092,7 +1096,8 @@ static Handle fbm_request_display_frame(Handle h)
                     frame_info->status = FS_DECODER_SHARE_DISCARD;
                     break;
                 default:
-                    printf("Fatal Error: invalid frame at %s:%s:%d!!!!\n", __FILE__, __FUNCTION__, __LINE__);
+                    printf("Fatal Error: invalid frame(%d) at %s:%s:%d!!!!\n", \
+                        frame_info->status, __FILE__, __FUNCTION__, __LINE__);
                     break;
             }
         }
@@ -1119,6 +1124,10 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   
   if (!info) 
     return CEDARX_RESULT_INVALID_ARGS;
+
+  if ((info->width > MAX_SUPPORTED_VIDEO_WIDTH) || \
+        (info->height > MAX_SUPPORTED_VIDEO_HEIGHT))
+    return CEDARX_RESULT_INVALID_ARGS;
     
   decoder = (cedarx_decoder_t*)mem_alloc(sizeof(cedarx_decoder_t));
   if (!decoder)
@@ -1129,7 +1138,7 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   
   result = ve_init();
   if (CEDARX_RESULT_OK != result) 
-    goto failed2;
+    goto failed3;
           
   mem_set(&config, 0, sizeof(vconfig_t));
   mem_set(&stream_info, 0, sizeof(vstream_info_t));
@@ -1200,11 +1209,7 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
     case CEDARX_STREAM_FORMAT_H264:
       stream_info.format = STREAM_FORMAT_H264;
       stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
-      decoder->greedy = 1;
-      break;    
-    case CEDARX_STREAM_FORMAT_AVC1:
-      stream_info.format = STREAM_FORMAT_H264;
-      stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
+      stream_info.is_pts_correct = 1;
       decoder->greedy = 1;
       break;    
     case CEDARX_STREAM_FORMAT_VC1:
@@ -1224,9 +1229,8 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
       stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
       break;
     default:
-      stream_info.format = STREAM_FORMAT_H264;
-      stream_info.sub_format = STREAM_SUB_FORMAT_UNKNOW;
-      break;
+      result = CEDARX_RESULT_INVALID_ARGS;
+      goto failed2;
   } 
 
   switch (info->container)
@@ -1284,8 +1288,10 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
 
   if (info->data && (info->data_size > 0)) {
     decoder->init_data = mem_alloc(info->data_size);
-    if (!decoder->init_data)
+    if (!decoder->init_data) {
+        result = CEDARX_RESULT_NO_ENOUGH_MEMORY;
         goto failed2;
+    }
     mem_cpy(decoder->init_data, info->data, info->data_size);
     stream_info.init_data = decoder->init_data;
     stream_info.init_data_len = info->data_size;
@@ -1315,23 +1321,27 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
     result = CEDARX_RESULT_VE_FAILED;
     goto failed1;
   }
-    
+  
+  libve_reset(0, decoder->ve);  
   decoder->vbv = vbv_init();
   if (!decoder->vbv) {
     result = CEDARX_RESULT_NO_ENOUGH_MEMORY;
-    goto failed1;
+    goto failed0;
   }
     
   libve_set_vbv(decoder->vbv, decoder->ve);
   return CEDARX_RESULT_OK; 
-   
+
+failed0:
+  libve_close(0, decoder->ve);  
 failed1:
   ve_release();
   mem_exit();
-  ve_exit();
   if (decoder->init_data)
     mem_free(decoder->init_data);
 failed2:
+  ve_exit();
+failed3:
   mem_free(decoder); 
   cedarx_decoder = NULL;
   return result;    
