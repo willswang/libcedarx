@@ -179,6 +179,7 @@ void libcedarx_display_free_frame(cedarx_picture_t *picture);
 cedarx_result_e libcedarx_display_request_layer(int top);
 void libcedarx_display_release_layer(void);
 cedarx_result_e libcedarx_display_video_frame(cedarx_picture_t *picture);
+cedarx_result_e libcedarx_get_stream_info(cedarx_info_t *info);
 char* libcedarx_version(void);
 
 #ifdef __cplusplus
