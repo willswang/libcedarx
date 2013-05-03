@@ -128,6 +128,14 @@ extern "C" {
 
     u8*       libve_get_last_error(Handle libve);    //* get a text description of last happened error;
 
+    vresult_e libve_set_ive(IVEControl_t* ive);
+
+    vresult_e libve_set_ios(IOS_t* ios);
+
+    vresult_e libve_set_ifbm(IFBM_t* ifbm);
+
+    vresult_e libve_set_ivbv(IVBV_t* ivbv);
+
 #ifdef __cplusplus
 }
 #endif
