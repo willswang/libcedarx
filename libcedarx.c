@@ -1141,6 +1141,16 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
   vconfig_t config;
   vstream_info_t stream_info;
   cedarx_decoder_t* decoder;
+
+  /*
+   * Even if this is not necessary for the native Linux libvecore.so library,
+   * we need to explicitly set IVE, IOS, IFBM and IVBV interfaces when loading
+   * and using Android libraries via libhybris.
+   */
+  libve_set_ive(&IVE);
+  libve_set_ios(&IOS);
+  libve_set_ifbm(&IFBM);
+  libve_set_ivbv(&IVBV);
   
   if (!info) 
     return CEDARX_RESULT_INVALID_ARGS;
