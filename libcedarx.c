@@ -205,6 +205,16 @@ static void  mem_cpy(void* dst, void* src, u32 size)
 
 static void  mem_flush_cache(u8* mem, u32 size)
 {
+    cedarx_decoder_t* decoder = cedarx_decoder;
+    if (decoder && decoder->fd != -1) {
+        struct cedarv_cache_range range =
+        {
+            .start = (int)mem,
+            .end = (int)(mem + size)
+        };
+
+        ioctl(decoder->fd, IOCTL_FLUSH_CACHE, (void*)(&range));
+    }
 }
 
 static u32 mem_phy_addr(u32 virtual_addr)
@@ -512,10 +522,13 @@ static cedarx_result_e vbv_add_stream_frame(vstream_data_t* stream, Handle h)
     if (new_write_addr >= vbv->vbv_buf_end) { 
       u32 size = vbv->vbv_buf_end - vbv->write_addr;
       mem_cpy(vbv->write_addr, stream->data, size);
+      mem_flush_cache(vbv->write_addr, size);
       mem_cpy(vbv->vbv_buf, stream->data + size, stream->length - size);
+      mem_flush_cache(vbv->vbv_buf, stream->length - size);
       new_write_addr -= vbv->max_size;
     } else {
       mem_cpy(vbv->write_addr, stream->data, stream->length);
+      mem_flush_cache(vbv->write_addr, stream->length);
     }
 
     write_index = vbv->frame_fifo.write_index;
@@ -1323,6 +1336,7 @@ cedarx_result_e libcedarx_decoder_open(cedarx_info_t* info)
         goto failed2;
     }
     mem_cpy(decoder->init_data, info->data, info->data_size);
+    mem_flush_cache(decoder->init_data, info->data_size);
     stream_info.init_data = decoder->init_data;
     stream_info.init_data_len = info->data_size;
   } else {
